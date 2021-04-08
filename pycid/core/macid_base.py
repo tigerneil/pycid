@@ -298,7 +298,13 @@ class MACIDBase(CausalBayesianNetwork):
 
     def pure_policies(self, decision_nodes: Iterable[str]) -> Iterator[Tuple[FunctionCPD, ...]]:
         """
-        Iterate over all of an agent's pure policies in this subgame.
+        Return all pure policies for nodes in decision nodes.
+        This is the cartesian product of the sets of all
+        pure decision rules for each node in decision nodes.
+
+        // Example
+        To return all of agent i's possible pure policies in a macid, call:
+        macid.pure_policies(macid.agent_decisions[i])
         """
         possible_dec_rules = list(map(self.pure_decision_rules, decision_nodes))
         return itertools.product(*possible_dec_rules)

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import copy
 import itertools
-from typing import Dict, Iterable, List, Optional, Tuple
+import math
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
+import nashpy as nash
 import networkx as nx
+import numpy as np
 from pgmpy.factors.discrete import TabularCPD
 
 from pycid.core.cpd import DecisionDomain, FunctionCPD
-from pycid.core.macid_base import MACIDBase
+from pycid.core.macid_base import AgentLabel, MACIDBase
 from pycid.core.relevance_graph import CondensedRelevanceGraph
 
 
@@ -92,6 +95,86 @@ class MACID(MACIDBase):
                     extended_spes.append(partial_profile + list(ne))
             spes = extended_spes
         return spes
+
+    def get_mixed_ne(self) -> List[List[TabularCPD]]:
+        """
+        Returns all mixed Nash equilibria in non-degnerate 2-player games using
+        Nashpy's support enumeration implementation.
+
+        Returns most mixed Nash equilbria in degnerate 2-player games.
+        """
+        agents = list(self.agents)
+        if len(agents) != 2:
+            raise ValueError(
+                f"This MACID has {len(agents)} agents and yet this method currently only works for 2 agent games."
+            )
+
+        agent_pure_policies = [list(self.pure_policies(self.agent_decisions[agent])) for agent in agents]
+
+        def _agent_util(pp: Tuple[FunctionCPD, ...], agent: AgentLabel) -> float:
+            self.add_cpds(*pp)
+            return self.expected_utility({}, agent=agent)
+
+        payoff1 = np.array(
+            [[_agent_util(pp1 + pp2, agents[0]) for pp2 in agent_pure_policies[1]] for pp1 in agent_pure_policies[0]]
+        )
+        payoff2 = np.array(
+            [[_agent_util(pp1 + pp2, agents[1]) for pp2 in agent_pure_policies[1]] for pp1 in agent_pure_policies[0]]
+        )
+        game = nash.Game(payoff1, payoff2)  # could make cleaner with yield instead
+        equilibria = game.support_enumeration()
+
+        all_mixed_ne = []
+        for eq in equilibria:
+            mixed_ne = list(
+                itertools.chain(
+                    *[list(self.mixed_policy_cpd(agent_pure_policies[agent], eq[agent])) for agent in range(2)]
+                )
+            )
+            all_mixed_ne.append(mixed_ne)
+        return all_mixed_ne
+
+    def mixed_policy_cpd(
+        self, pure_policies: List[Tuple[FunctionCPD, ...]], prob_dist: List[float]
+    ) -> Iterator[TabularCPD]:
+        """
+        #TODO it should be returning FunctionCPDs rather than TabularCPDs...
+        Return a mixed policy cpd.
+
+        Parameters
+        ----------
+        pure_policies = a List of all pure policies for a certain agent in a MACID.
+        prob_dist = the mixed policy's probability distribution over pure policies.
+
+        """
+        if not math.isclose(sum(prob_dist), 1.0, abs_tol=0.01):
+            raise ValueError(f"The values in {prob_dist} do not sum to 1")
+
+        num_decision_rules = len(pure_policies[0])  # how many decision nodes that agent has
+
+        for i in range(num_decision_rules):
+            variable = pure_policies[0][i].variable
+            card = len(pure_policies[0][i].domain)  # type: ignore
+            evidence = self.get_parents(variable)
+            evidence_card = [self.get_cardinality(variable) for variable in evidence]
+
+            pure_prop_matrices = [pure_policy[i].values for pure_policy in pure_policies]
+            new_mixed_prob_matrix = np.array(
+                sum([matrix * prob for matrix, prob in zip(pure_prop_matrices, prob_dist)])
+            )
+
+            if new_mixed_prob_matrix.ndim == 1:  # annoying pgmpy feature
+                new_mixed_prob_matrix = np.atleast_2d(new_mixed_prob_matrix).reshape(-1, 1)
+
+            decision_rule = TabularCPD(
+                variable,
+                card,
+                new_mixed_prob_matrix,
+                evidence,
+                evidence_card,
+                state_names={variable: pure_policies[0][i].domain},
+            )
+            yield decision_rule
 
     def decs_in_each_maid_subgame(self) -> List[set]:
         """

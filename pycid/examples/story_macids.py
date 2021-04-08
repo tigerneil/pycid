@@ -112,6 +112,8 @@ def matching_pennies() -> MACID:
     d2_domain = ["H", "T"]
     agent1_payoff = np.array([[1, -1], [-1, 1]])
     agent2_payoff = np.array([[-1, 1], [1, -1]])
+    # agent1_payoff = np.array([[0, 3], [4, 0]])
+    # agent2_payoff = np.array([[0, 5], [4, 3]])
 
     macid.add_cpds(
         DecisionDomain("D1", d1_domain),
@@ -147,7 +149,7 @@ def taxi_competition() -> MACID:
         | cheap    |     3    |   1      |
         +----------+----------+----------+
 
-    There are 3 pure startegy NE and 1 pure SPE.
+    There are 3 pure policy NE and 1 pure SPE.
     """
     macid = MACID(
         [("D1", "D2"), ("D1", "U1"), ("D1", "U2"), ("D2", "U2"), ("D2", "U1")],
