@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import itertools
+import math
 from functools import lru_cache
 from typing import (
+    Any,
     Callable,
     Collection,
     Dict,
@@ -13,10 +15,12 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
 )
+from warnings import warn
 
 import matplotlib.cm as cm
 import networkx as nx
@@ -24,8 +28,8 @@ import numpy as np
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference.ExactInference import BeliefPropagation
 
-from pycid.core.causal_bayesian_network import CausalBayesianNetwork
-from pycid.core.cpd import DecisionDomain, FunctionCPD, Outcome, UniformRandomCPD
+from pycid.core.causal_bayesian_network import CausalBayesianNetwork, Relationship
+from pycid.core.cpd import DecisionDomain, Outcome, StochasticFunctionCPD
 from pycid.core.relevance_graph import RelevanceGraph
 
 AgentLabel = Hashable  # Could be a TypeVar instead but that might be overkill
@@ -49,11 +53,24 @@ class MACIDBase(CausalBayesianNetwork):
         A dictionary mapping utility node label => agent label.
     """
 
+    class Model(CausalBayesianNetwork.Model):
+        def __setitem__(self, variable: str, relationship: Union[Relationship, Sequence]) -> None:
+            if isinstance(relationship, (DecisionDomain, Sequence)) and variable not in self.cbn.decisions:
+                warn(f"adding DecisionDomain to non-decision node {variable}")
+            super().__setitem__(variable, relationship)
+
+        def to_tabular_cpd(self, variable: str, relationship: Union[Relationship, Sequence[Outcome]]) -> TabularCPD:
+            if isinstance(relationship, Sequence):
+                return DecisionDomain(variable, self.cbn, relationship)
+            else:
+                return super().to_tabular_cpd(variable, relationship)
+
     def __init__(
         self,
-        edges: Iterable[Tuple[str, str]],
-        agent_decisions: Mapping[AgentLabel, Iterable[str]],
-        agent_utilities: Mapping[AgentLabel, Iterable[str]],
+        edges: Iterable[Tuple[str, str]] = None,
+        agent_decisions: Mapping[AgentLabel, List[str]] = None,
+        agent_utilities: Mapping[AgentLabel, List[str]] = None,
+        **kwargs: Any,
     ):
         """Initialize a new MACIDBase instance.
 
@@ -67,10 +84,10 @@ class MACIDBase(CausalBayesianNetwork):
         agent_utilities: The utility nodes of each agent.
             A mapping of agent label => node labels.
         """
-        super().__init__(edges=edges)
+        super().__init__(edges=edges, **kwargs)
 
-        self.agent_decisions = {agent: list(nodes) for agent, nodes in agent_decisions.items()}
-        self.agent_utilities = {agent: list(nodes) for agent, nodes in agent_utilities.items()}
+        self.agent_decisions = dict(agent_decisions) if agent_decisions else {}
+        self.agent_utilities = dict(agent_utilities) if agent_utilities else {}
 
         self.decision_agent = {node: agent for agent, nodes in self.agent_decisions.items() for node in nodes}
         self.utility_agent = {node: agent for agent, nodes in self.agent_utilities.items() for node in nodes}
@@ -91,18 +108,23 @@ class MACIDBase(CausalBayesianNetwork):
         return self.agent_utilities.keys()
 
     def make_decision(self, node: str, agent: AgentLabel = 0) -> None:
-        """"Turn a chance or utility node into a decision node."""
+        """ "Turn a chance or utility node into a decision node.
+        - agent specifies which agent the decision node should belong to in a MACID.
+        """
         self.make_chance(node)
-        self.agent_decisions[agent].append(node)
+        if agent not in self.agent_decisions:
+            self.agent_decisions[agent] = [node]
+        else:
+            self.agent_decisions[agent].append(node)
         self.decision_agent[node] = agent
-        cpd = self.get_cpds(node)
-        if cpd and not isinstance(cpd, DecisionDomain):
-            self.add_cpds(DecisionDomain(node, cpd.domain))
 
     def make_utility(self, node: str, agent: AgentLabel = 0) -> None:
-        """"Turn a chance or utility node into a decision node."""
+        """ "Turn a chance or utility node into a decision node."""
         self.make_chance(node)
-        self.agent_utilities[agent].append(node)
+        if agent not in self.agent_utilities:
+            self.agent_utilities[agent] = [node]
+        else:
+            self.agent_utilities[agent].append(node)
         self.utility_agent[node] = agent
 
     def make_chance(self, node: str) -> None:
@@ -116,18 +138,8 @@ class MACIDBase(CausalBayesianNetwork):
             agent = self.utility_agent.pop(node)
             self.agent_utilities[agent].remove(node)
 
-    def add_cpds(self, *cpds: TabularCPD) -> None:
-        """
-        Add the given CPDs and initialize them.
-
-        A CPD can be a TabularCPD, FunctionCPD, UniformRandomCPD, DecisionDomain, or a StochasticFunctionCPD.
-        """
-
-        # For MACIDs and CIDs we need to do an extra check
-        for cpd in cpds:
-            if isinstance(cpd, DecisionDomain) and cpd.variable not in self.decisions:
-                raise ValueError(f"trying to add DecisionDomain to non-decision node {cpd.variable}")
-        super().add_cpds(*cpds)
+    def add_cpds(self, *cpds: TabularCPD, **relationships: Union[Relationship, List[Outcome]]) -> None:
+        super().add_cpds(*cpds, **relationships)
 
     def query(
         self, query: Iterable[str], context: Dict[str, Outcome], intervention: Dict[str, Outcome] = None
@@ -145,8 +157,6 @@ class MACIDBase(CausalBayesianNetwork):
 
         intervention: Interventions to apply. A dictionary mapping node => outcome.
         """
-
-        self._fix_lowercase_variables(context)
         for variable, outcome in context.items():
             if outcome not in self.get_cpds(variable).domain:
                 raise ValueError(f"The outcome {outcome} is not in the domain of {variable}")
@@ -160,7 +170,7 @@ class MACIDBase(CausalBayesianNetwork):
                 mech_graph.remove_edge(parent, intervention_var)
         for decision in self.decisions:
             for query_node in query:
-                if mech_graph.is_active_trail(
+                if mech_graph.is_dconnected(
                     decision + "mec", query_node, observed=list(context.keys()) + list(intervention.keys())
                 ):
                     cpd = self.get_cpds(decision)
@@ -240,7 +250,7 @@ class MACIDBase(CausalBayesianNetwork):
                 con_nodes = [decision] + self.get_parents(decision)
                 agent_utilities = self.agent_utilities[self.decision_agent[decision]]
                 for utility in set(agent_utilities).intersection(nx.descendants(self, decision)):
-                    if mg.is_active_trail(node + "mec", utility, con_nodes):
+                    if mg.is_dconnected(node + "mec", utility, con_nodes):
                         return True
         return False
 
@@ -267,10 +277,10 @@ class MACIDBase(CausalBayesianNetwork):
                 return False
         return True
 
-    def pure_decision_rules(self, decision: str) -> Iterator[FunctionCPD]:
+    def pure_decision_rules(self, decision: str) -> Iterator[StochasticFunctionCPD]:
         """Return a list of the decision rules available at the given decision"""
 
-        domain = self.get_cpds(decision).domain
+        domain = self.model.domain[decision]
         parents = self.get_parents(decision)
         parent_cardinalities = [self.get_cardinality(parent) for parent in parents]
 
@@ -284,7 +294,7 @@ class MACIDBase(CausalBayesianNetwork):
             idx = 0
             for i, parent in enumerate(parents):
                 name_to_no: Dict[Outcome, int] = self.get_cpds(parent).name_to_no[parent]
-                idx += name_to_no[pv[parent.lower()]] * int(np.product(parent_cardinalities[:i]))
+                idx += name_to_no[pv[parent]] * int(np.product(parent_cardinalities[:i]))
             assert 0 <= idx <= number_of_decision_contexts
             return idx
 
@@ -294,20 +304,23 @@ class MACIDBase(CausalBayesianNetwork):
                 # using a default argument is a trick to get func_list to evaluate early
                 return lambda **parent_values: early_eval_func_list[arg2idx(parent_values)]
 
-            yield FunctionCPD(decision, produce_function(), domain=domain)
+            yield StochasticFunctionCPD(decision, produce_function(), self, domain=domain)
 
-    def pure_policies(self, decision_nodes: Iterable[str]) -> Iterator[Tuple[FunctionCPD, ...]]:
+    def pure_policies(self, decision_nodes: Iterable[str]) -> Iterator[Tuple[StochasticFunctionCPD, ...]]:
         """
         Iterate over all of an agent's pure policies in this subgame.
         """
         possible_dec_rules = list(map(self.pure_decision_rules, decision_nodes))
         return itertools.product(*possible_dec_rules)
 
-    def optimal_pure_policies(self, decisions: Iterable[str], eps: float = 1e-8) -> List[Tuple[FunctionCPD, ...]]:
+    def optimal_pure_policies(
+        self, decisions: Iterable[str], rel_tol: float = 1e-9
+    ) -> List[Tuple[StochasticFunctionCPD, ...]]:
         """Find all optimal policies for a given set of decisions.
 
         - All decisions must belong to the same agent.
-        - eps is the margin of error when comparing utilities for equality.
+        - rel_tol: is the relative tolerance. It is the amount of error allowed, relative to the larger
+        absolute value of the two values it is comparing (the two utilities.)
         """
         if not decisions:
             return []
@@ -331,14 +344,14 @@ class MACIDBase(CausalBayesianNetwork):
         for policy in macid.pure_policies(decisions):
             macid.add_cpds(*policy)
             expected_utility = macid.expected_utility({}, agent=agent)
-            if abs(expected_utility - max_utility) < eps:
+            if math.isclose(expected_utility, max_utility, rel_tol=rel_tol):
                 optimal_policies.append(policy)
             elif expected_utility > max_utility:
                 optimal_policies = [policy]
                 max_utility = expected_utility
         return optimal_policies
 
-    def optimal_pure_decision_rules(self, decision: str) -> List[FunctionCPD]:
+    def optimal_pure_decision_rules(self, decision: str) -> List[StochasticFunctionCPD]:
         """
         Return a list of all optimal pure decision rules for a given decision
         """
@@ -346,12 +359,14 @@ class MACIDBase(CausalBayesianNetwork):
 
     def impute_random_decision(self, d: str) -> None:
         """Impute a random policy to the given decision node"""
-        current_cpd = self.get_cpds(d)
-        if current_cpd:
-            sn = current_cpd.domain
-        else:
+        try:
+            domain = self.model.domain[d]
+        except KeyError:
             raise ValueError(f"can't figure out domain for {d}, did you forget to specify DecisionDomain?")
-        self.add_cpds(UniformRandomCPD(d, sn))
+        else:
+            self.model[d] = StochasticFunctionCPD(
+                d, lambda **pv: {outcome: 1 / len(domain) for outcome in domain}, self, domain, label="random_decision"
+            )
 
     def impute_fully_mixed_policy_profile(self) -> None:
         """Impute a fully mixed policy profile - ie a random decision rule to all decision nodes"""
@@ -359,21 +374,15 @@ class MACIDBase(CausalBayesianNetwork):
             self.impute_random_decision(d)
 
     def remove_all_decision_rules(self) -> None:
-        """ Remove the decision rules from all decisions in the (MA)CID"""
+        """Remove the decision rules from all decisions in the (MA)CID"""
         for d in self.decisions:
-            cpd = self.get_cpds(d)
-            if cpd is None:
-                raise ValueError(f"decision {d} has not yet been assigned a domain.")
-            elif isinstance(cpd, DecisionDomain):
-                continue
-            else:
-                self.add_cpds(DecisionDomain(d, cpd.domain))
+            self.model[d] = self.model.domain[d]
 
     def impute_optimal_decision(self, decision: str) -> None:
         """Impute an optimal policy to the given decision node"""
         # self.add_cpds(random.choice(self.optimal_pure_decision_rules(d)))
         self.impute_random_decision(decision)
-        domain = self.get_cpds(decision).domain
+        domain = self.model.domain[decision]
         utility_nodes = self.agent_utilities[self.decision_agent[decision]]
         descendant_utility_nodes = list(set(utility_nodes).intersection(nx.descendants(self, decision)))
         copy = self.copy()  # using a copy "freezes" the policy so it doesn't adapt to future interventions
@@ -386,7 +395,7 @@ class MACIDBase(CausalBayesianNetwork):
                 eu[d] = sum(copy.expected_value(descendant_utility_nodes, parent_values))
             return max(eu, key=eu.get)  # type: ignore
 
-        self.add_cpds(FunctionCPD(decision, opt_policy, domain=domain, label="opt"))
+        self.add_cpds(StochasticFunctionCPD(decision, opt_policy, self, domain=domain, label="opt"))
 
     def impute_conditional_expectation_decision(self, decision: str, y: str) -> None:
         """Imputes a policy for decision = the expectation of y conditioning on d's parents"""
@@ -395,28 +404,32 @@ class MACIDBase(CausalBayesianNetwork):
 
         @lru_cache(maxsize=1000)
         def cond_exp_policy(**pv: Outcome) -> float:
-            if y.lower() in pv:
-                return pv[y.lower()]  # type: ignore
+            if y in pv:
+                return pv[y]  # type: ignore
             else:
                 return copy.expected_value([y], pv)[0]
 
-        self.add_cpds(FunctionCPD(decision, cond_exp_policy, label="cond_exp({})".format(y)))
+        self.add_cpds(**{decision: cond_exp_policy})
 
     # Wrapper around DAG.active_trail_nodes to accept arbitrary iterables for observed.
     # Really, DAG.active_trail_nodes should accept Sets, especially since it does
     # inefficient membership checks on observed as a list.
     def active_trail_nodes(
-        self, variables: Union[str, List[str], Tuple[str, ...]], observed: Optional[Iterable[str]] = None
+        self, variables: Union[str, List[str], Tuple[str, ...]], observed: Optional[Iterable[str]] = None, **kwargs: Any
     ) -> Dict[str, Set[str]]:
-        return super().active_trail_nodes(variables, list(observed))  # type: ignore
+        return super().active_trail_nodes(variables, list(observed), **kwargs)  # type: ignore
 
     def copy_without_cpds(self) -> MACIDBase:
         """copy the MACIDBase object without its CPDs"""
-        return MACIDBase(
-            edges=self.edges(),
-            agent_decisions=self.agent_decisions,
-            agent_utilities=self.agent_utilities,
-        )
+        new = MACIDBase()
+        new.add_nodes_from(self.nodes)
+        new.add_edges_from(self.edges)
+        for agent in self.agents:
+            for decision in self.agent_decisions[agent]:
+                new.make_decision(decision, agent)
+            for utility in self.agent_utilities[agent]:
+                new.make_utility(utility, agent)
+        return new
 
     def _get_color(self, node: str) -> Union[np.ndarray, str]:
         """

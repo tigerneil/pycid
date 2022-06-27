@@ -3,11 +3,17 @@
 This package implements causal influence diagrams and methods to analyze them, and is part of the
 [Causal Incentives](https://causalincentives.com) project.
 
-Building on [pgmpy](https://pgmpy.org/), pycid provides methods for
-defining CIDs and MACIDs,
+Building on [pgmpy](https://pgmpy.org/) and [NetworkX](https://networkx.org/), pycid provides methods for
+defining CBNs, CIDs and MACIDs,
 computing optimal policies and Nash equilibria,
 studying the effects of interventions, and
 checking graphical criteria for various types of incentives.
+
+## News
+
+Version 0.7 *breaks backwards compatibility* by requiring CPD arguments to match the case of the parent nodes.
+To update your code to the latest version, simply change the case of the arguments, as illustrated [here](https://github.com/causalincentives/pycid/commit/e50ee06b7eafac63fe7c9471764c9c5774fc743b).
+Alternatively, stick to version 0.2.8.
 
 ## Install
 Create and activate
@@ -18,7 +24,7 @@ Then install using:
 python3 -m pip install pycid
 ```
 
-PyCID requires python version 3.7 or greater.
+PyCID requires python version 3.8 or greater.
 
 ## Basic usage
 
@@ -35,12 +41,10 @@ cid = pycid.CID([
     decisions=['D'],  # D is a decision node
     utilities=['U'])  # U is a utility node
 
-# specify the causal relationships
-cid.add_cpds(
-    pycid.UniformRandomCPD('S', [-1, 1]),  # S is -1 or 1 with equal probability
-    pycid.DecisionDomain('D', [-1, 1]),  # the permitted choices for D are -1 and 1
-    pycid.FunctionCPD('U', lambda s, d: s * d)  # U is the product of S and D (arguments lowercase the variable names)
-)
+# specify the causal relationships with CPDs using keyword arguments
+cid.add_cpds(S = pycid.discrete_uniform([-1, 1]), # S is -1 or 1 with equal probability
+             D=[-1, 1], # the permitted action choices for D are -1 and 1
+             U=lambda S, D: S * D) # U is the product of S and D (argument names match parent names)
 
 # Draw the result
 cid.draw()
@@ -48,12 +52,14 @@ cid.draw()
 
 ![image](./image.png "")
 
-The [notebooks](./notebooks) provide many more examples, including
-a [CID Basics Tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/CID_Basics_Tutorial.ipynb),
-a [MACID Basics Tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/MACID_Basics_Tutorial.ipynb), and
-a [CID Incentives Tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/CID_Incentives_Tutorial.ipynb).
+The [notebooks](./notebooks) provide many more examples, including:
+* [CBN Tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/CBN_Tutorial.ipynb) shows how to specify the structure and (causal) relationships between nodes, and ask simple queries.
+* [CID tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/CID_Basics_Tutorial.ipynb) adds special decision and utility nodes for one agent, and how to compute optimal policies.
+* [MACID tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/MACID_Basics_Tutorial.ipynb) covers methods for handling multiple agents, including finding subgames and Nash equilibria.
+* [Incentive Analysis tutorial](https://colab.research.google.com/github/causalincentives/pycid/blob/master/notebooks/CID_Incentives_Tutorial.ipynb) illustrates various methods for analyzing the incentives of agents.
 
-To quickly get started using colab, make a copy of [this notebook](https://colab.research.google.com/drive/1QsITqn02c8zBfdOxaR0gVFcLQA_2UROu#scrollTo=GfupUXwM77Ti).
+The above notebooks links all open in Colab, and can be run
+directly in the browser with no further setup or installation required.
 
 ## Code overview
 
@@ -97,3 +103,18 @@ Before committing to the master branch, please ensure that:
 * Your functions have docstrings and types, and a unit test verifying that they work
 * For notebooks, you have done "restart kernel and run all cells" before saving and committing
 * Any documentation (such as this file) is up-to-date
+
+## Citing
+Please use the following BibTeX entry for citing `PyCID` in your research:
+
+```
+@InProceedings{ james_fox-proc-scipy-2021,
+  author    = { {J}ames {F}ox and {T}om {E}veritt and {R}yan {C}arey and {E}ric {L}anglois and {A}lessandro {A}bate and {M}ichael {W}ooldridge },
+  title     = { {P}y{C}{I}{D}: {A} {P}ython {L}ibrary for {C}ausal {I}nfluence {D}iagrams },
+  booktitle = { {P}roceedings of the 20th {P}ython in {S}cience {C}onference },
+  pages     = { 43 - 51 },
+  year      = { 2021 },
+  editor    = { {M}eghann {A}garwal and {C}hris {C}alloway and {D}illon {N}iederhut and {D}avid {S}hupe },
+  doi       = {10.25080/majora-1b6fd038-008}
+}
+```

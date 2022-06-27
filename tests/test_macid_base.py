@@ -77,8 +77,8 @@ class TestBASE(unittest.TestCase):
 
     # @unittest.skip("")
     def test_get_valid_order(self) -> None:
-        macid = prisoners_dilemma()
-        self.assertEqual(macid.get_valid_order(), ["D2", "D1"])
+        macid = taxi_competition()
+        self.assertEqual(macid.get_valid_order(), ["D1", "D2"])
         rg = RelevanceGraph(macid)
         with self.assertRaises(AttributeError):
             rg.get_valid_order()
@@ -197,7 +197,7 @@ class TestBASE(unittest.TestCase):
         macid.remove_all_decision_rules()
         self.assertTrue(isinstance(macid.get_cpds("D1"), DecisionDomain))
         macid_copy = macid.copy_without_cpds()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(KeyError):
             macid_copy.remove_all_decision_rules()
 
     # @unittest.skip("")

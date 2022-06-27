@@ -70,6 +70,16 @@ class TestAssignCpd:
         cbn_3node.remove_cpds("U")
 
 
+class TestIsStructuralCausalModel:
+    @staticmethod
+    def test_is_scm(cbn_3node: CausalBayesianNetwork) -> None:
+        assert cbn_3node.is_structural_causal_model()
+
+    @staticmethod
+    def test_is_not_scm(cbn_3node_uniform: CausalBayesianNetwork) -> None:
+        assert not cbn_3node_uniform.is_structural_causal_model()
+
+
 class TestQuery:
     @staticmethod
     def test_query(cbn_3node: CausalBayesianNetwork) -> None:
@@ -78,13 +88,20 @@ class TestQuery:
     @staticmethod
     def test_query_disconnected_components() -> None:
         cbn = CausalBayesianNetwork([("A", "B")])
-        cbn.add_cpds(RandomCPD("A"), RandomCPD("B"))
+        cbn.add_cpds(A=RandomCPD(), B=RandomCPD())
         cbn.query(["A"], {}, intervention={"B": 0})  # the intervention separates A and B into separare components
 
     @staticmethod
     def test_valid_context(cbn_3node: CausalBayesianNetwork) -> None:
         with pytest.raises(ValueError):
             cbn_3node.query(["U"], {"S": 0})
+
+
+class TestSample:
+    @staticmethod
+    def test_sample(cbn_3node: CausalBayesianNetwork) -> None:
+        sample = cbn_3node.sample()
+        assert (sample == {"S": -1, "D": 0, "U": 0}) or (sample == {"S": 1, "D": 2, "U": 2})
 
 
 class TestIntervention:

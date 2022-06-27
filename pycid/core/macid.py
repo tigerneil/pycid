@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import networkx as nx
 from pgmpy.factors.discrete import TabularCPD
 
-from pycid.core.cpd import DecisionDomain, FunctionCPD
+from pycid.core.cpd import DecisionDomain, StochasticFunctionCPD
 from pycid.core.macid_base import MACIDBase
 from pycid.core.relevance_graph import CondensedRelevanceGraph
 
@@ -15,18 +15,22 @@ from pycid.core.relevance_graph import CondensedRelevanceGraph
 class MACID(MACIDBase):
     """A Multi-Agent Causal Influence Diagram"""
 
-    def get_all_pure_ne(self) -> List[List[FunctionCPD]]:
+    def get_all_pure_ne(self) -> List[List[StochasticFunctionCPD]]:
         """
         Return a list of all pure Nash equilbiria in the MACID.
         - Each NE comes as a list of FunctionCPDs, one for each decision node in the MACID.
         """
         return self.get_all_pure_ne_in_sg()
 
-    def joint_pure_policies(self, decisions: Iterable[str]) -> List[Tuple[FunctionCPD, ...]]:
+    def joint_pure_policies(self, decisions: Iterable[str]) -> List[Tuple[StochasticFunctionCPD, ...]]:
+        """return a list of tuples of all joint pure policies in the MACID. A joint pure policy assigns a
+        pure decision rule to every decision node in the MACID."""
         all_dec_decision_rules = list(map(self.pure_decision_rules, decisions))
         return list(itertools.product(*all_dec_decision_rules))
 
-    def get_all_pure_ne_in_sg(self, decisions_in_sg: Optional[Iterable[str]] = None) -> List[List[FunctionCPD]]:
+    def get_all_pure_ne_in_sg(
+        self, decisions_in_sg: Optional[Iterable[str]] = None
+    ) -> List[List[StochasticFunctionCPD]]:
         """
         Return a list of all pure Nash equilbiria in a MACID subgame.
 
@@ -53,7 +57,7 @@ class MACID(MACIDBase):
                 macid.impute_random_decision(d)
 
         # NE finder
-        all_pure_ne_in_sg: List[List[FunctionCPD]] = []
+        all_pure_ne_in_sg: List[List[StochasticFunctionCPD]] = []
         for pp in self.joint_pure_policies(decisions_in_sg):
             macid.add_cpds(*pp)  # impute the policy profile
 
@@ -61,26 +65,26 @@ class MACID(MACIDBase):
                 eu_pp_agent_a = macid.expected_utility({}, agent=a)
                 macid.add_cpds(*macid.optimal_pure_policies(agent_decs_in_sg[a])[0])
                 max_eu_agent_a = macid.expected_utility({}, agent=a)
-
                 if max_eu_agent_a > eu_pp_agent_a:  # not an NE
                     break
-            else:  # it's an NE
+            else:
+                # it's an NE
                 all_pure_ne_in_sg.append(list(pp))
 
         return all_pure_ne_in_sg
 
-    def policy_profile_assignment(self, partial_policy: Iterable[FunctionCPD]) -> Dict:
+    def policy_profile_assignment(self, partial_policy: Iterable[StochasticFunctionCPD]) -> Dict:
         """Return a dictionary with the joint or partial policy profile assigned -
         ie a decision rule for each of the MACIM's decision nodes."""
         pp: Dict[str, Optional[TabularCPD]] = {d: None for d in self.decisions}
         pp.update({cpd.variable: cpd for cpd in partial_policy})
         return pp
 
-    def get_all_pure_spe(self) -> List[List[FunctionCPD]]:
+    def get_all_pure_spe(self) -> List[List[StochasticFunctionCPD]]:
         """Return a list of all pure subgame perfect Nash equilbiria (SPE) in the MACIM
         - Each SPE comes as a list of FunctionCPDs, one for each decision node in the MACID.
         """
-        spes: List[List[FunctionCPD]] = [[]]
+        spes: List[List[StochasticFunctionCPD]] = [[]]
 
         # backwards induction over the sccs in the condensed relevance graph (handling tie-breaks)
         for scc in reversed(CondensedRelevanceGraph(self).get_scc_topological_ordering()):
@@ -118,8 +122,12 @@ class MACID(MACIDBase):
 
     def copy_without_cpds(self) -> MACID:
         """copy the MACID structure"""
-        return MACID(
-            edges=self.edges(),
-            agent_decisions=self.agent_decisions,
-            agent_utilities=self.agent_utilities,
-        )
+        new = MACID()
+        new.add_nodes_from(self.nodes)
+        new.add_edges_from(self.edges)
+        for agent in self.agents:
+            for decision in self.agent_decisions[agent]:
+                new.make_decision(decision, agent)
+            for utility in self.agent_utilities[agent]:
+                new.make_utility(utility, agent)
+        return new
